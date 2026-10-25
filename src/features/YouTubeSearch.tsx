@@ -1,0 +1,11 @@
+import { useState } from 'react';
+import { z } from 'zod';
+import { api, cloudConfigured } from '../services/cloud';
+import type { GrowthController } from '../app/useGrowth';
+const resultsSchema = z.object({ results: z.array(z.object({ title: z.string().max(160), creator: z.string(), url: z.string().url() })).max(5) });
+export function YouTubeSearch({ app }: { app: GrowthController }) {
+  const [query, setQuery] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const [results, setResults] = useState<z.infer<typeof resultsSchema>['results']>([]);
+  const connected = cloudConfigured && app.owner !== 'guest' && app.online;
+  return <details className="panel"><summary>Find a resource on YouTube</summary><p>Search a small set of YouTube results. Watching is optional; your own practice is what earns rewards.</p>{!connected && <p className="fine-print">Connected search needs account setup and an internet connection. You can always paste a known video link above.</p>}<form className="inline-form" onSubmit={(e) => { e.preventDefault(); setBusy(true); setError(''); void api('/youtube/search', { query }, undefined, undefined, app.owner).then((value) => setResults(resultsSchema.parse(value).results)).catch((e: unknown) => setError(e instanceof Error ? e.message : 'Search failed. Paste a link instead.')).finally(() => setBusy(false)); }}><input aria-label="Search YouTube" value={query} onChange={(e) => setQuery(e.target.value)} maxLength={100} minLength={3} required placeholder="A skill you want to practice…" /><button className="secondary-button" disabled={!connected || busy}>{busy ? 'Searching…' : 'Search YouTube'}</button></form>{error && <p role="alert" className="error">{error}</p>}{results.map((r) => <div className="list-row" key={r.url}><div className="grow"><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a><span className="small">YouTube · {r.creator}</span></div><button className="subtle-button" disabled={app.state!.resources.some((saved) => !saved.deleted && saved.url === r.url)} onClick={() => void app.dispatch({ type: 'resource.add', id: crypto.randomUUID(), title: r.title, url: r.url }, 'Resource saved to your shelf.')}>Save link</button></div>)}</details>;
+}

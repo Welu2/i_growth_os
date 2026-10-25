@@ -1,0 +1,268 @@
+import { expect, test, type Page } from '@playwright/test';
+async function onboard(page: Page) {
+  await page.goto('/');
+  await page.getByLabel('What should we call you?').fill('Ada');
+  await page.getByLabel('One thing you want to grow toward').fill('Learn to sketch');
+  await page.getByLabel('A small daily habit to help you get there').fill('Draw for ten minutes');
+  await page.getByRole('button', { name: 'Meet your companion' }).click();
+  await page.getByRole('button', { name: 'Start growing' }).click();
+  await expect(page.getByRole('heading', { name: 'Hey, Ada. Good to see you.' })).toBeVisible();
+}
+async function settingsSection(page: Page, name: string) { const section = page.locator('.settings-section').filter({ has: page.locator('summary > .grow > strong', { hasText: name }) }); if (!await section.getAttribute('open').then((value) => value !== null)) await section.locator(':scope > summary').click(); }
+async function library(page: Page) { await page.getByRole('button', { name: /^Library / }).click(); }
+async function addResource(page: Page) { await library(page); await page.getByRole('button', { name: 'Save a resource', exact: true }).click(); }
+async function activity(page: Page) { await page.getByRole('button', { name: 'Activity', exact: true }).click(); }
+async function tab(page: Page, name: string) { await page.getByRole('button', { name, exact: true }).filter({ visible: true }).first().click(); }
+test('guest progress, virtual currency, purchases and offline restart', async ({ page, context }) => {
+  const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
+  await onboard(page);
+  await page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Complete goal Learn to sketch' }).click();
+  await tab(page, 'Learn');
+  await page.getByLabel('New practice task').fill('Sketch a cup'); await page.getByRole('button', { name: 'Add practice task' }).click();
+  await page.getByRole('button', { name: 'Complete practice Sketch a cup' }).click();
+  await tab(page, 'Progress');
+  await expect(page.getByRole('button', { name: '30 Growth Coins. Open progress.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Your home', exact: true }).click();
+  await page.getByRole('button', { name: '30 coins', exact: true }).click();
+  await page.getByRole('button', { name: 'Spend 30 coins' }).click();
+  await expect(page.getByRole('button', { name: 'Equipped · remove' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Hey, Ada. Good to see you.' })).toBeVisible();
+  await context.setOffline(true); await page.reload();
+  await expect(page.getByRole('heading', { name: 'Hey, Ada. Good to see you.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true })).toBeDisabled();
+  await tab(page, 'Learn');
+  await page.getByLabel('New practice task').fill('Offline practice'); await page.getByRole('button', { name: 'Add practice task' }).click();
+  await expect(page.getByText('Offline practice', { exact: true })).toBeVisible();
+  await page.reload(); await tab(page, 'Learn'); await expect(page.getByText('Offline practice', { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+test('resources, safe notes, explicit template assistant and mobile layout', async ({ page }) => {
+  await onboard(page); await tab(page, 'Learn');
+  await addResource(page); await page.getByLabel('Give it a name').fill('Drawing resource'); await page.getByLabel('Video link').fill('https://youtu.be/dQw4w9WgXcQ'); await page.getByRole('button', { name: 'Save resource' }).click();
+  await page.getByLabel('My notes').fill('<script>window.bad=true</script> A private note'); await page.getByRole('button', { name: 'Save notes' }).click();
+  await page.reload(); await tab(page, 'Learn'); await library(page); await expect(page.getByLabel('My notes')).toHaveValue('<script>window.bad=true</script> A private note');
+  await page.getByRole('button', { name: 'Build a learning plan' }).click(); await page.getByLabel('What would you like help with?').fill('Learn to sketch');
+  await expect(page.getByRole('button', { name: 'Ask AI', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Use offline template' }).click(); await expect(page.getByText('Offline template', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save these practice steps' }).click(); await expect(page.getByRole('button', { name: 'Saved to Learn' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('button', { name: /^Practice / }).click();
+  await expect(page.getByText('Write down one specific question about Learn to sketch.', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await tab(page, 'Settings'); await settingsSection(page, 'Comfort and privacy'); await page.getByLabel('Use gentle, reduced motion').click(); await expect(page.getByLabel('Use gentle, reduced motion')).toBeChecked(); await expect(page.locator('html')).toHaveClass(/reduce-motion/);
+  await page.screenshot({ path: `test-results/settings-${test.info().project.name}.png`, fullPage: true });
+});
+test('multi-tab habit completion cannot duplicate XP', async ({ page, context }) => {
+  await onboard(page); const second = await context.newPage(); await second.goto('/');
+  await expect(second.getByRole('heading', { name: 'Hey, Ada. Good to see you.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true }).click();
+  await expect(second.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true })).toBeDisabled();
+  await second.reload();
+  await expect(page.getByText('25 / 150 XP', { exact: true })).toBeVisible(); await expect(second.getByText('25 / 150 XP', { exact: true })).toBeVisible();
+});
+test('automatic activity needs no timer, survives reload, and respects pause and exclusions', async ({ page }) => {
+  await onboard(page); await page.bringToFront();
+  await expect(page.getByRole('button', { name: 'Start focus', exact: true })).toHaveCount(0);
+  await page.clock.install();
+  await page.getByRole('button', { name: 'Enable automatic tracking', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pause tracking', exact: true })).toBeVisible();
+  await page.clock.runFor(62_000);
+  await expect(page.locator('.activity-total > strong')).toHaveText('1 min');
+  await tab(page, 'Learn'); await page.clock.runFor(62_000);
+  await tab(page, 'Progress');
+  await activity(page);
+  await expect(page.locator('.observed-activities li').filter({ hasText: 'Learning & practice' })).toContainText('1 min');
+  await page.reload();
+  await expect(page.locator('.activity-total > strong')).toHaveText('2 min');
+  await tab(page, 'Settings');
+  await settingsSection(page, 'Comfort and privacy');
+  await page.getByText('Tracking exclusions', { exact: true }).click();
+  await page.getByLabel('Learning & practice', { exact: true }).click();
+  await expect(page.getByLabel('Learning & practice', { exact: true })).toBeChecked();
+  await tab(page, 'Learn'); await page.clock.runFor(62_000);
+  await tab(page, 'Today');
+  await expect(page.locator('.activity-total > strong')).toHaveText('2 min');
+  await page.getByRole('button', { name: 'Pause tracking', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Enable automatic tracking', exact: true })).toBeVisible();
+  await page.clock.runFor(62_000);
+  await expect(page.locator('.activity-total > strong')).toHaveText('2 min');
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+  await expect(page.getByText('0 / 150 XP', { exact: true })).toBeVisible();
+  await page.evaluate(() => { window.scrollTo(0, 0); (document.activeElement as HTMLElement)?.blur(); });
+  await page.screenshot({ path: `test-results/today-${test.info().project.name}.png`, fullPage: true });
+  await page.screenshot({ path: `test-results/today-viewport-${test.info().project.name}.png` });
+});
+
+test('plant story unlock persists and larger text fits narrow screens', async ({ page, context }) => {
+  await onboard(page);
+  await tab(page, 'Settings');
+  await settingsSection(page, 'Your profile');
+  await page.getByRole('combobox', { name: 'Companion', exact: true }).selectOption('seedling');
+  await page.getByRole('button', { name: 'Save profile' }).click();
+  await settingsSection(page, 'Comfort and privacy');
+  await page.getByLabel('Use larger text').click();
+  await expect(page.getByLabel('Use larger text')).toBeChecked();
+  await page.getByRole('combobox', { name: 'Appearance' }).selectOption('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.getByLabel('Use gentle, reduced motion').click();
+  await expect(page.getByLabel('Use gentle, reduced motion')).toBeChecked();
+  await expect(page.locator('html')).toHaveAttribute('data-text-size', 'large');
+  await tab(page, 'Today');
+  await expect(page.getByRole('button', { name: 'Give a snack' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'See today’s steps' }).click();
+  await expect(page.locator('#daily-wins')).toBeFocused();
+  await page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true }).click();
+  await expect(page.getByText('The first new leaf', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Our story' }).click();
+  await expect(page.getByText('Chapter 1 · Yours to keep')).toBeVisible();
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await context.setOffline(true); await page.reload();
+  await expect(page.getByText('The first new leaf', { exact: true })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-text-size', 'large');
+  await page.setViewportSize({ width: 360, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => { window.scrollTo(0, 0); (document.activeElement as HTMLElement)?.blur(); });
+  await page.screenshot({ path: `test-results/plant-${test.info().project.name}.png`, fullPage: true });
+  await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
+  const overflow = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth, elements: [...document.querySelectorAll('body *')].filter((el) => el.scrollWidth > el.clientWidth + 1 && el instanceof HTMLElement).slice(0, 20).map((el) => ({ tag: el.tagName, class: el.getAttribute('class'), width: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.slice(0,60) })) }));
+  expect(overflow.scroll, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.width);
+  await page.getByRole('button', { name: 'Our story' }).click();
+  await expect(page.getByRole('button', { name: 'Close dialog' })).toBeVisible();
+});
+test('reviewed linked assignments survive a removed resource and time reports show unknowns', async ({ page }) => {
+  await onboard(page); await tab(page, 'Learn');
+  await addResource(page); await page.getByLabel('Give it a name').fill('Drawing lesson'); await page.getByLabel('Video link').fill('https://youtu.be/dQw4w9WgXcQ'); await page.getByRole('button', { name: 'Save resource' }).click();
+  await page.getByRole('button', { name: 'Create practice from this resource' }).click();
+  await expect(page.getByLabel('Include notes I review below')).not.toBeChecked();
+  await page.getByRole('button', { name: 'Use offline template' }).click();
+  await page.getByLabel('Practice step 1').fill('Sketch a leaf from observation');
+  await page.getByLabel('Done when').first().fill('One leaf sketch is finished');
+  await page.getByRole('button', { name: 'Save these practice steps' }).click();
+  await expect(page.getByRole('button', { name: 'Saved to Learn' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.reload(); await tab(page, 'Learn');
+  const task = page.locator('.practice-task').filter({ hasText: 'Sketch a leaf from observation' });
+  await task.locator('summary').click();
+  await expect(task.getByText('One leaf sketch is finished')).toBeVisible();
+  await task.getByLabel('My practice reflection').fill('I noticed the curved edges.');
+  await task.getByRole('button', { name: 'Save reflection' }).click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await library(page);
+  await page.getByRole('button', { name: 'Remove Drawing lesson' }).click();
+  await page.getByRole('button', { name: /^Practice / }).click();
+  await expect(task.getByText('The linked resource was removed. You can still complete this practice.')).toBeVisible();
+  await task.getByRole('button', { name: 'Complete practice Sketch a leaf from observation' }).click();
+  await tab(page, 'Today'); await expect(page.getByText('A desk for new ideas', { exact: true })).toBeVisible();
+  await tab(page, 'Progress'); await activity(page); await page.getByRole('button', { name: '30 days', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Active in this app Not measured/ })).toBeVisible();
+  await page.getByText('View daily numbers', { exact: true }).click();
+  await expect(page.locator('.time-table tbody tr')).toHaveCount(30);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('playback records only trusted player events and never earns rewards', async ({ page }) => {
+  await page.route('https://www.tiktok.com/player/v1/**', async (route) => {
+    await route.fulfill({ contentType: 'text/html', body: `<!doctype html><button id="play">Play test fixture</button><script>
+      const send=(type,value)=>parent.postMessage({'x-tiktok-player':true,type,value},'*');
+      send('onPlayerReady');
+      document.getElementById('play').onclick=()=>{send('onStateChange',1);let time=0;send('onCurrentTime',{currentTime:time});setInterval(()=>send('onCurrentTime',{currentTime:++time}),1000)};
+    </script>` });
+  });
+  await onboard(page); await tab(page, 'Settings'); await settingsSection(page, 'Comfort and privacy'); await page.getByLabel('Count my activity inside this app').click(); await expect(page.getByLabel('Count my activity inside this app')).toBeChecked();
+  await tab(page, 'Learn'); await addResource(page); await page.getByLabel('Give it a name').fill('Player fixture');
+  await page.getByLabel('Video link').fill('https://www.tiktok.com/@creator/video/6718335390845095173');
+  await page.getByRole('button', { name: 'Save resource' }).click(); await page.getByRole('button', { name: 'Open video', exact: true }).click();
+  await page.evaluate(() => {
+    const send = (type: string, value: unknown) => window.dispatchEvent(new MessageEvent('message', { origin: 'https://www.tiktok.com', source: window, data: { 'x-tiktok-player': true, type, value } }));
+    send('onStateChange', 1); send('onCurrentTime', { currentTime: 0 }); send('onCurrentTime', { currentTime: 60 });
+  });
+  await expect(page.getByText('Recording visible playback estimates. No rewards are tied to watching.')).toHaveCount(0);
+  await page.frameLocator('iframe').getByRole('button', { name: 'Play test fixture' }).click();
+  await expect(page.getByText('Recording visible playback estimates. No rewards are tied to watching.')).toBeVisible();
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await tab(page, 'Progress');
+  await activity(page);
+  await expect(page.getByRole('button', { name: /Video in this app <1 min/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+});
+
+test('habit schedules and archived recovery retain completion rewards', async ({ page }) => {
+  await onboard(page);
+  await page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true }).click();
+  await page.getByRole('button', { name: 'Archive Draw for ten minutes' }).click();
+  await page.getByText('Manage habit schedules', { exact: true }).click();
+  await page.getByRole('button', { name: 'Restore Draw for ten minutes' }).click();
+  await expect(page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Schedule Draw for ten minutes', exact: true }).click();
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const today = await page.evaluate(() => new Date().getDay());
+  for (let i = 0; i < days.length; i++) if (i !== today) await page.getByLabel(days[i], { exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Save schedule' }).click();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Complete Draw for ten minutes', exact: true })).toBeDisabled();
+  await expect(page.getByText('25 / 150 XP', { exact: true })).toBeVisible();
+});
+
+test('CSV review exclusions, categories and optional lifestyle persist offline', async ({ page, context }) => {
+  await onboard(page); await tab(page, 'Settings');
+  const now = Date.now();
+  const csv = `id,device,app,start,end,category\na,Laptop,Editor,${now - 180000},${now - 120000},other\nb,Laptop,Browser,${now - 120000},${now - 60000},other`;
+  await settingsSection(page, 'Optional desktop activity import');
+  await page.getByLabel('Choose activity JSON or CSV').setInputFiles({ name: 'activity.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByLabel('Include Browser', { exact: true }).uncheck();
+  await page.getByLabel('Category for Editor').selectOption('learning');
+  await expect(page.getByText('1 selected · 0 already saved. Adds 1 min after overlaps with saved imports.')).toBeVisible();
+  await page.getByRole('button', { name: 'Import these summaries' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await settingsSection(page, 'Comfort and privacy');
+  await page.getByLabel('Show food and lifestyle tools').click();
+  await expect(page.getByLabel('Show food and lifestyle tools')).toBeChecked();
+  await page.getByLabel('Personal fasting preference').selectOption('personal');
+  await page.getByText('Curated Ethiopian recipe ideas', { exact: true }).click();
+  await page.getByRole('button', { name: 'Use Shiro in my meal note' }).click();
+  await expect(page.getByLabel('Meal', { exact: true })).toHaveValue('Shiro');
+  await page.getByLabel('Personal note', { exact: true }).fill('Made at home');
+  await page.getByRole('button', { name: 'Save meal note' }).click();
+  await expect(page.getByRole('button', { name: 'Delete meal Shiro' })).toBeVisible();
+  await settingsSection(page, 'Comfort and privacy');
+  await page.getByLabel('Use larger text').click();
+  await expect(page.getByLabel('Use larger text')).toBeChecked();
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await context.setOffline(true); await page.reload(); await tab(page, 'Settings');
+  await expect(page.getByLabel('Personal fasting preference')).toHaveValue('personal');
+  await expect(page.getByRole('button', { name: 'Delete meal Shiro' })).toBeVisible();
+  await tab(page, 'Progress');
+  await activity(page);
+  await expect(page.getByRole('button', { name: /Imported desktop 1 min/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+});
+
+test('restored unfinished timer can be completed once after reload', async ({ page }) => {
+  await onboard(page); await tab(page, 'Settings');
+  await settingsSection(page, 'Your data stays yours');
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export backup' }).click();
+  const download = await downloadPromise; const stream = await download.createReadStream();
+  const chunks = []; for await (const chunk of stream!) chunks.push(chunk);
+  const backup = JSON.parse(Buffer.concat(chunks).toString());
+  const now = Date.now();
+  backup.state.sessions.push({ id: '11111111-1111-4111-8111-111111111111', title: 'Earlier practice', targetMinutes: 1, startedAt: now - 120000, runningSince: now - 120000, elapsedMs: 0, endedAt: null, cancelled: false, segments: [] });
+  await page.getByLabel('Restore guest backup').setInputFiles({ name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
+  await page.getByRole('button', { name: 'Restore backup', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Your saved focus session' })).toBeVisible();
+  await page.getByRole('button', { name: 'Finish saved session' }).click();
+  await expect(page.getByRole('heading', { name: 'Your saved focus session' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '5 Growth Coins. Open progress.' })).toBeVisible();
+  await page.reload(); await tab(page, 'Progress');
+  await expect(page.getByRole('button', { name: '5 Growth Coins. Open progress.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Saved focus sessions' })).toBeVisible();
+});

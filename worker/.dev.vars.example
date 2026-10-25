@@ -1,0 +1,10 @@
+# Local only. Copy to worker/.dev.vars (ignored). Never use VITE_ for these secrets.
+SUPABASE_URL=https://your-project.supabase.co
+# Accepts a server-secret key (sb_secret_...) or legacy service_role JWT.
+SUPABASE_SERVICE_ROLE_KEY=replace-with-server-only-key
+GEMINI_API_KEY=replace-with-provider-key
+# Select a currently available model with structured JSON output and free-tier access.
+GEMINI_MODEL=gemini-2.5-flash
+
+# Optional, enables bounded discovery. Known video links work without this.
+YOUTUBE_API_KEY=

@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2023", "DOM"], "types": [], "strict": true, "skipLibCheck": true, "noEmit": true, "allowImportingTsExtensions": true, "verbatimModuleSyntax": true },
+  "include": ["index.ts", "../src/domain/model.ts"]
+}

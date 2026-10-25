@@ -1,0 +1,12 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "i-growth-os-api",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-01",
+  "vars": {
+    "ALLOWED_ORIGIN": "http://localhost:4173",
+    "AI_USER_DAILY_LIMIT": "10",
+    "AI_GLOBAL_DAILY_LIMIT": "100"
+  },
+  "observability": { "enabled": false }
+}
