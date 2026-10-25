@@ -123,10 +123,10 @@ export default {
       if (path === '/sync' && request.method === 'POST') return cors(await sync(request, env, user));
       if (path === '/assistant' && request.method === 'POST') return cors(await assistant(request, env, user));
       if (path === '/youtube/search' && request.method === 'POST') {
-        const { query } = searchInput.parse(await boundedJson(request));
+        const { query, maxSeconds } = searchInput.parse(await boundedJson(request));
         if (!env.YOUTUBE_API_KEY) throw new HttpError(503, 'YouTube discovery is not configured. Paste a video link instead.');
         await reserve(env, user, 'youtube', 5, 80);
-        try { return cors(json(await searchYoutube(env.YOUTUBE_API_KEY, query))); } catch { throw new HttpError(503, 'YouTube search is unavailable or at its quota. Paste a video link instead.'); }
+        try { return cors(json(await searchYoutube(env.YOUTUBE_API_KEY, query, maxSeconds, request.signal))); } catch { throw new HttpError(503, 'YouTube search is unavailable or at its quota. Paste a video link instead.'); }
       }
       if (path === '/account' && request.method === 'DELETE') { await supabase(env, `/auth/v1/admin/users/${user}`, 'DELETE'); return cors(json({ deleted: true })); }
       throw new HttpError(404, 'Endpoint not found.');

@@ -1,0 +1,170 @@
+import { expect, test, type Page } from '@playwright/test';
+import { loadEnv } from 'vite';
+import { applyCommand, initialState, type Command } from '../../src/domain/model';
+const publicConfig = loadEnv('production', process.cwd(), 'VITE_');
+const configured = Boolean(publicConfig.VITE_SUPABASE_URL && publicConfig.VITE_SUPABASE_ANON_KEY && publicConfig.VITE_API_URL);
+async function tab(page: Page, name: string) { await page.getByRole('button', { name, exact: true }).filter({ visible: true }).first().click(); }
+async function guest(page: Page) {
+  await page.goto('/');
+  await page.getByLabel('What should we call you?').fill('Ada');
+  await page.getByLabel('One thing you want to grow toward').fill('Learn chess');
+  await page.getByLabel('A small daily habit to help you get there').fill('Review one move');
+  await page.getByRole('button', { name: 'Meet your companion' }).click();
+  await page.getByRole('button', { name: 'Start growing' }).click();
+  await tab(page, 'Learn');
+}
+async function openChess(page: Page) { await page.getByRole('button', { name: 'Learn chess', exact: true }).click(); return page.getByRole('dialog', { name: 'Learn chess', exact: true }); }
+async function accountFixture(page: Page) {
+  const user = { id: '11111111-1111-4111-8111-111111111111', aud: 'authenticated', role: 'authenticated', email: 'ada@example.test', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() };
+  const expiry = Math.floor(Date.now() / 1000) + 3600;
+  const token = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url') + '.' + Buffer.from(JSON.stringify({ sub: user.id, exp: expiry })).toString('base64url') + '.fixture';
+  const key = `sb-${new URL(publicConfig.VITE_SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+  await page.addInitScript(({ key, session }) => localStorage.setItem(key, JSON.stringify(session)), { key, session: { access_token: token, refresh_token: 'fixture-refresh', token_type: 'bearer', expires_in: 3600, expires_at: expiry, user } });
+  let state = applyCommand(initialState(), { id: crypto.randomUUID(), at: Date.now(), action: { type: 'onboard', profile: { name: 'Ada', companionName: 'Babu', companionType: 'panda', timezone: 'UTC' }, goal: 'Learn chess', habit: 'Review a move' } });
+  let revision = 1;
+  await page.route('**/auth/v1/**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(user) }));
+  await page.route('**/sync', (route) => {
+    const { commands } = route.request().postDataJSON() as { commands: Command[] };
+    for (const command of commands) state = applyCommand(state, command);
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ protocol: 4, state, revision: revision++, accepted: commands.map((command) => command.id), rejected: [] }) });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Hey, Ada. Good to see you.' })).toBeVisible();
+  await tab(page, 'Learn');
+}
+test('guest chess saves one concept and next step, resumes offline and never rewards reopening', async ({ page, context }) => {
+  await guest(page);
+  const dialog = await openChess(page);
+  await dialog.getByLabel('Time for this session').selectOption('5');
+  await expect(dialog).toContainText('Video up to 2:00');
+  await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Find short YouTube lessons' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Practice without a video' }).click();
+  await expect(dialog.getByRole('heading', { name: 'Try one move for yourself.' })).toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'I practiced this concept' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'e5: empty', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText('Try another square');
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await expect(page.locator('.practice-task')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+  await context.setOffline(true); await page.reload(); await tab(page, 'Learn');
+  await openChess(page);
+  await dialog.getByRole('button', { name: 'Resume saved practice' }).click();
+  await dialog.getByRole('button', { name: 'd4: white rook', exact: true }).focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
+  await expect(dialog.getByRole('button', { name: 'd7: empty', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByRole('status')).toContainText('You found it.');
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'I practiced this concept' }).click();
+  await dialog.getByLabel('My next chess step').fill('Chess: try three rook moves tomorrow');
+  await dialog.getByRole('button', { name: 'Save my next step', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Saved to Practice' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Back to Learn' }).click();
+  await expect(page.locator('.practice-task')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '10 Growth Coins. Open progress.' })).toBeVisible();
+  await page.reload(); await tab(page, 'Learn'); await openChess(page);
+  await dialog.getByRole('button', { name: 'Review my next step' }).click();
+  await expect(dialog.getByLabel('My next chess step')).toHaveValue('Chess: try three rook moves tomorrow');
+  await expect(dialog.getByRole('button', { name: 'Saved to Practice' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Back to Learn' }).click();
+  await tab(page, 'Today'); await expect(page.getByText('30 / 150 XP', { exact: true })).toBeVisible();
+});
+test('a user-supplied video is labeled honestly and practice fits a narrow screen', async ({ page }) => {
+  await page.route('https://www.youtube-nocookie.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<p>Test video fixture</p>' }));
+  await guest(page);
+  const dialog = await openChess(page);
+  await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+  await dialog.getByText('Use a YouTube link I already have', { exact: true }).click();
+  await dialog.getByLabel('Lesson name').fill('My rook lesson fixture');
+  await dialog.getByLabel('YouTube lesson link').fill('https://youtu.be/dQw4w9WgXcQ');
+  await dialog.getByRole('button', { name: 'Use this link', exact: true }).click();
+  await expect(dialog).toContainText('length not verified');
+  await dialog.getByRole('button', { name: 'Save lesson and start practice' }).click();
+  await dialog.getByRole('button', { name: 'Open lesson video' }).click();
+  await expect(dialog.locator('iframe')).toHaveAttribute('title', 'My rook lesson fixture');
+  await dialog.getByRole('button', { name: 'Close lesson video' }).click();
+  await expect(page.getByRole('button', { name: '0 Growth Coins. Open progress.' })).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 850 });
+  await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await dialog.getByLabel('Destination square').fill('d7');
+  await dialog.getByRole('button', { name: 'Try move', exact: true }).click();
+  await dialog.getByRole('button', { name: 'I practiced this concept' }).click();
+  await dialog.getByRole('button', { name: 'Finish without a next step' }).click();
+  await page.evaluate(() => { document.documentElement.style.fontSize = ''; });
+  await page.getByRole('button', { name: /^Library / }).click();
+  await expect(page.getByRole('heading', { name: 'My rook lesson fixture' })).toBeVisible();
+});
+test('other levels provide distinct concepts and persist their own progress', async ({ page }) => {
+  await guest(page);
+  for (const [level, square] of [['basics', 'h6'], ['intermediate', 'f5']]) {
+    const dialog = await openChess(page);
+    await dialog.getByLabel('Your chess level').selectOption(level);
+    await dialog.getByLabel('Time for this session').selectOption('15');
+    await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Practice without a video' }).click();
+    await dialog.getByLabel('Destination square').fill(square);
+    await dialog.getByRole('button', { name: 'Try move', exact: true }).click();
+    await expect(dialog.getByRole('status')).toContainText('You found it.');
+    await page.screenshot({ path: `test-results/chess-${level}-${test.info().project.name}.png` });
+    await dialog.getByRole('button', { name: 'I practiced this concept' }).click();
+    await dialog.getByRole('button', { name: 'Finish without a next step' }).click();
+  }
+  await expect(page.getByRole('button', { name: '20 Growth Coins. Open progress.' })).toBeVisible();
+  await expect(page.locator('.practice-task')).toHaveCount(2);
+});
+test('connected short lesson selection handles quota errors and saves a verified runtime result', async ({ page }) => {
+  test.skip(!configured, 'Public configuration required for simulated signed-in search.');
+  let searches = 0;
+  await page.route('**/youtube/search', (route) => {
+    searches++;
+    expect(route.request().postDataJSON()).toEqual({ query: 'chess beginner rook movement explained', maxSeconds: 120 });
+    expect(route.request().headers().authorization).toMatch(/^Bearer /);
+    return route.fulfill({ status: searches === 1 ? 429 : 200, contentType: 'application/json', body: JSON.stringify(searches === 1 ? { error: 'Daily search limit reached. Practice is still available.' } : { results: [{ title: 'Short rook lesson fixture', creator: 'Test teacher', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', durationSeconds: 90 }] }) });
+  });
+  await accountFixture(page);
+  const dialog = await openChess(page);
+  await dialog.getByLabel('Time for this session').selectOption('5');
+  await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Find short YouTube lessons' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Daily search limit');
+  await dialog.getByRole('button', { name: 'Find short YouTube lessons' }).click();
+  const result = dialog.getByRole('button', { name: /Short rook lesson fixture/ });
+  await expect(result).toContainText('1:30'); await result.click();
+  await dialog.getByRole('button', { name: 'Save lesson and start practice' }).click();
+  await expect(dialog).toContainText('3 min practice');
+  await expect(dialog.getByRole('button', { name: 'Open lesson video' })).toBeEnabled();
+  await dialog.getByLabel('Destination square').fill('d7');
+  await dialog.getByRole('button', { name: 'Try move', exact: true }).click();
+  await dialog.getByRole('button', { name: 'I practiced this concept' }).click();
+  await dialog.getByRole('button', { name: 'Save my next step', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Saved to Practice' })).toBeDisabled();
+});
+test('incompatible short-search responses and cancelled searches cannot become lessons', async ({ page }) => {
+  test.skip(!configured, 'Public configuration required for simulated signed-in search.');
+  let searches = 0;
+  let release: (() => void) | undefined;
+  await page.route('**/youtube/search', async (route) => {
+    searches++;
+    if (searches === 2) await new Promise<void>((resolve) => { release = resolve; });
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ results: [{ title: 'Unverified old backend result', creator: 'Fixture', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }] }) }).catch(() => undefined);
+  });
+  await accountFixture(page);
+  const dialog = await openChess(page);
+  await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Find short YouTube lessons' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('did not return verified short lessons');
+  await expect(dialog.getByRole('button', { name: /Unverified old backend result/ })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Find short YouTube lessons' }).click();
+  await expect.poll(() => searches).toBe(2);
+  await dialog.getByRole('button', { name: 'Change level or time' }).click();
+  release?.();
+  await expect(dialog.getByLabel('Your chess level')).toBeVisible();
+  await dialog.getByLabel('Your chess level').selectOption('basics');
+  await dialog.getByRole('button', { name: 'Pick a lesson', exact: true }).click();
+  await expect(dialog).toContainText('Bishop diagonals');
+  await expect(dialog.getByRole('button', { name: /Unverified old backend result/ })).toHaveCount(0);
+});
